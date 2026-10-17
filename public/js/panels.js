@@ -207,6 +207,7 @@ export function initPanels(app) {
     bottomEl = $("#bottom");
   let sideTab = "watchlist",
     bottomTab = "tester";
+  const publicHiddenBottom = new Set(["editor", "paper", "ptq"]);
   const P = {};
 
   // ---------- tabs ----------
@@ -224,6 +225,7 @@ export function initPanels(app) {
   };
 
   function showSide(t) {
+    if (app.publicDemo && t === "alerts") t = "watchlist";
     sideTab = t;
     document
       .querySelectorAll("#sideTabs button")
@@ -231,6 +233,7 @@ export function initPanels(app) {
     renderSide();
   }
   function showBottom(t, toggle = false) {
+    if (app.publicDemo && publicHiddenBottom.has(t)) t = "tester";
     if (
       toggle &&
       t === bottomTab &&
@@ -360,6 +363,7 @@ export function initPanels(app) {
 
   // ======================= ALERTS =======================
   async function renderAlerts() {
+    if (app.publicDemo) return showSide("watchlist");
     side.innerHTML =
       '<div class="pad row-flex"><button class="btn primary" id="alNew">New alert</button><button class="btn" id="alPerm">Desktop notifications</button></div><div id="alList"></div><h4 class="pad" style="margin:0;padding-bottom:0">Recent</h4><div id="alLog"></div>';
     $("#alNew").onclick = () => openAlertDialog();
@@ -426,6 +430,7 @@ export function initPanels(app) {
     return conds.map((c) => `${nm(c.left)} ${OP_LABEL[c.op] || c.op} ${nm(c.right)}`).join(a.match === "any" ? " or " : " and ");
   }
   function openAlertDialog(preset = {}) {
+    if (app.publicDemo) return app.toast("Alerts are disabled in public demo mode.", "err");
     const p = app.active;
     const price = p?.shown.at(-1)?.close ?? 0;
     const rules = preset.rules || [preset.rule || {
@@ -875,6 +880,7 @@ export function initPanels(app) {
       );
   }
   function renderScreener() {
+    const scanLimit = app.publicDemo ? 20 : 100;
     const sectors = [
       ...new Set(sc.rows.map((r) => r.sector).filter(Boolean)),
     ].sort();
@@ -886,7 +892,7 @@ export function initPanels(app) {
       ${n("minPrice", "Price from")}${n("maxPrice", "Price to")}${n("minChg", "Change % from", 70)}${n("maxChg", "Change % to", 70)}${n("minVol", "Min volume", 100)}${sc.universe !== "crypto" ? n("minCap", "Min market cap", 110) : ""}
       ${sectors.length > 1 ? `<label class="field">Sector<select data-f="sector"><option value="">All</option>${sectors.map((s) => `<option ${s === sc.filters.sector ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>` : ""}
       <button class="btn" id="scRefresh" style="align-self:end">Refresh</button></div>
-      <div class="row-flex" style="margin-top:8px"><span class="hint-text">Technical filter:</span><div class="rules" id="scRule" style="margin:0">${ruleHtml(sc.rule)}</div><label class="field">On<select id="scTf">${["1h", "4h", "1D", "1W"].map((t) => `<option ${t === sc.tf ? "selected" : ""}>${t}</option>`).join("")}</select></label><button class="btn primary" id="scScan" style="align-self:end">Scan top 100</button>${sc.scan ? '<button class="btn" id="scClear" style="align-self:end">Clear scan</button>' : ""}</div></div>
+      <div class="row-flex" style="margin-top:8px"><span class="hint-text">Technical filter:</span><div class="rules" id="scRule" style="margin:0">${ruleHtml(sc.rule)}</div><label class="field">On<select id="scTf">${["1h", "4h", "1D", "1W"].map((t) => `<option ${t === sc.tf ? "selected" : ""}>${t}</option>`).join("")}</select></label><button class="btn primary" id="scScan" style="align-self:end">Scan top ${scanLimit}</button>${sc.scan ? '<button class="btn" id="scClear" style="align-self:end">Clear scan</button>' : ""}</div></div>
       <div id="scTable"></div>`;
     $("#scU").value = sc.universe;
     $("#scU").onchange = (e) => {
@@ -920,7 +926,7 @@ export function initPanels(app) {
       sc.scan = null;
       const targets = filtered()
         .sort((a, b) => b.volume - a.volume)
-        .slice(0, 100)
+        .slice(0, scanLimit)
         .map((r) => r.symbol);
       sc.scan = prev;
       $("#scScan").textContent = `Scanning ${targets.length}…`;
@@ -1492,6 +1498,7 @@ export function initPanels(app) {
   const edListHtml = (list) =>
     list.map((c) => `<div class="card" data-file="${esc(c.file)}"><div class="top"><span>${esc(c.file)}</span><span class="row-flex"><button class="btn small" data-act="open">Edit</button><button class="btn small" data-act="add">Add to chart</button><button class="btn small danger" data-act="del">Delete</button></span></div>${c.error ? `<div class="sub down">${esc(c.error)}</div>` : ""}</div>`).join("") || '<p class="hint-text">None yet.</p>';
   async function renderEditor() {
+    if (app.publicDemo) return showBottom("tester");
     let list = [];
     try {
       list = await api.get("/api/custom");
@@ -1592,7 +1599,10 @@ export function initPanels(app) {
 
   // ---------- hooks for the app ----------
   P.showBottom = showBottom;
-  P.openAlertDialog = openAlertDialog;
+  P.openAlertDialog = (preset) => {
+    if (app.publicDemo) return app.toast("Alerts are disabled in public demo mode.", "err");
+    return openAlertDialog(preset);
+  };
   let lastSymbol = null;
   P.onActiveChange = () => {
     if (sideTab === "watchlist") drawRows();

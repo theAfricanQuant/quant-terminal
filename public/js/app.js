@@ -9,8 +9,11 @@ import {
 } from "../lib/indicators.js";
 import { parseTf, toCsv } from "../lib/series.js";
 import { initPanels } from "./panels.js";
+import { setToastContent } from "./toast.js";
 
 const $ = (s, el = document) => el.querySelector(s);
+const PUBLIC_DEMO = window.QUANT_TERMINAL_PUBLIC_DEMO === true;
+const PUBLIC_STATE_KEY = "quant-terminal-public-state-v1";
 const TF_QUICK = ["1m", "5m", "15m", "1h", "4h", "1D", "1W"];
 const LAYOUTS = { 1: 1, "2v": 2, "2h": 2, 3: 3, 4: 4, 6: 6, 8: 8, 16: 16 };
 const DEFAULT_WATCHLISTS = {
@@ -28,6 +31,7 @@ const DEFAULT_WATCHLISTS = {
 
 class App {
   constructor() {
+    this.publicDemo = PUBLIC_DEMO;
     this.panes = [];
     this.active = null;
     this.tool = "cursor";
@@ -38,10 +42,18 @@ class App {
 
   async init() {
     let state = {};
-    try {
-      state = await api.get("/api/state");
-    } catch {
-      /* first run */
+    if (PUBLIC_DEMO) {
+      try {
+        state = JSON.parse(localStorage.getItem(PUBLIC_STATE_KEY) || "{}");
+      } catch {
+        /* a corrupt browser preference is treated as a first run */
+      }
+    } else {
+      try {
+        state = await api.get("/api/state");
+      } catch {
+        /* first run */
+      }
     }
     this.state = {
       layout: "1",
@@ -80,8 +92,9 @@ class App {
     this.buildDrawbar();
     this.setLayout(this.state.layout, false);
     this.panels = initPanels(this);
+    if (PUBLIC_DEMO) this.applyPublicMode();
     this.bindKeys();
-    this.listenAlerts();
+    if (!PUBLIC_DEMO) this.listenAlerts();
     this.checkHealth();
     setInterval(() => this.checkHealth(), 60000);
   }
@@ -91,6 +104,14 @@ class App {
     this.state.panes = this.panes.map((p) => p.cfg);
     this.state.active = this.panes.indexOf(this.active);
     clearTimeout(this.saveTimer);
+    if (PUBLIC_DEMO) {
+      try {
+        localStorage.setItem(PUBLIC_STATE_KEY, JSON.stringify(this.state));
+      } catch {
+        this.toast("Couldn't save browser preferences.", "err");
+      }
+      return;
+    }
     this.saveTimer = setTimeout(
       () =>
         api
@@ -121,6 +142,7 @@ class App {
 
   // ---------- custom indicators ----------
   async loadCustomIndicators() {
+    if (PUBLIC_DEMO) return;
     try {
       const list = await api.get("/api/custom");
       for (const c of list) await this.importCustom(c.file, c.mtime);
@@ -142,6 +164,23 @@ class App {
       );
       return null;
     }
+  }
+
+  applyPublicMode() {
+    document.documentElement.dataset.publicDemo = "1";
+    const hidden = [
+      "#alertBtn",
+      '#sideTabs [data-tab="alerts"]',
+      '#drawbar [data-act="alert"]',
+      '#bottomTabs [data-tab="editor"]',
+      '#bottomTabs [data-tab="paper"]',
+      '#bottomTabs [data-tab="ptq"]',
+    ];
+    for (const selector of hidden)
+      document.querySelectorAll(selector).forEach((el) => {
+        el.hidden = true;
+        el.setAttribute("aria-hidden", "true");
+      });
   }
 
   // ---------- layout ----------
@@ -273,7 +312,10 @@ class App {
       this.setTool("replay-pick");
       this.toast("Click the bar you want replay to start from.");
     };
-    $("#alertBtn").onclick = () => this.panels.openAlertDialog();
+    $("#alertBtn").onclick = () => {
+      if (PUBLIC_DEMO) return this.toast("Alerts are disabled in public demo mode.", "err");
+      this.panels.openAlertDialog();
+    };
     $("#logBtn").onclick = () => {
       this.active.cfg.log = !this.active.cfg.log;
       this.active.render(false);
@@ -465,7 +507,9 @@ class App {
       "Indicators",
       `<input class="search-in" id="indQ" placeholder="Search ${INDICATORS.length} indicators…" autocomplete="off"><div class="list" id="indList"></div>`,
       {
-        foot: '<span class="hint-text" style="margin-right:auto">No limit per chart. Write your own in the Indicator editor tab.</span><button class="btn" data-new>New custom indicator</button>',
+        foot: PUBLIC_DEMO
+          ? '<span class="hint-text">Custom indicators are disabled in public demo mode.</span>'
+          : '<span class="hint-text" style="margin-right:auto">No limit per chart. Write your own in the Indicator editor tab.</span><button class="btn" data-new>New custom indicator</button>',
       },
     );
     const q = card.querySelector("#indQ"),
@@ -500,10 +544,12 @@ class App {
         this.pickAnchor(this.active, uid, anchor.key);
       } else this.toast(`Added ${BY_ID[it.dataset.id].name}`);
     };
-    card.querySelector("[data-new]").onclick = () => {
-      this.closeModal();
-      this.panels.showBottom("editor");
-    };
+    const newButton = card.querySelector("[data-new]");
+    if (newButton)
+      newButton.onclick = () => {
+        this.closeModal();
+        this.panels.showBottom("editor");
+      };
     draw();
     q.focus();
   }
@@ -589,6 +635,9 @@ class App {
 
   openSettings() {
     const s = this.settings;
+    const storageHint = PUBLIC_DEMO
+      ? "Public demo preferences stay in this browser's localStorage; they are not sent to the server."
+      : "Everything you save lives in the <code>data</code> folder next to the app, on your machine.";
     const card = this.modal(
       "Settings",
       `<div class="form-grid">
@@ -597,7 +646,7 @@ class App {
       <label class="field">Volume on the price chart<select id="sVol"><option value="1" ${s.volume ? "selected" : ""}>Show</option><option value="0" ${!s.volume ? "selected" : ""}>Hide</option></select></label>
       <label class="field">After placing a drawing<select id="sStay"><option value="0" ${!s.stayInDrawMode ? "selected" : ""}>Back to cursor</option><option value="1" ${s.stayInDrawMode ? "selected" : ""}>Keep the tool</option></select></label>
       <label class="field">Crosshair across charts<select id="sSync"><option value="0" ${!s.syncCrosshair ? "selected" : ""}>Independent</option><option value="1" ${s.syncCrosshair ? "selected" : ""}>Synced</option></select></label>
-    </div><p class="hint-text">Everything you save lives in the <code>data</code> folder next to the app, on your machine.</p>`,
+    </div><p class="hint-text">${storageHint}</p>`,
       { foot: '<button class="btn primary" data-ok>Save</button>' },
     );
     card.querySelector("[data-ok]").onclick = () => {
@@ -685,6 +734,7 @@ class App {
   }
 
   alertOnSelectedDrawing() {
+    if (PUBLIC_DEMO) return this.toast("Alerts are disabled in public demo mode.", "err");
     const d = this.active?.drawings.selected;
     if (!d) return this.toast("Click a line on the chart first to select it.");
     const right = this.lineOperandFor(d);
@@ -723,7 +773,7 @@ class App {
     const es = new EventSource("/api/events");
     es.addEventListener("alert", (m) => {
       const e = JSON.parse(m.data);
-      this.toast(`<b>Alert</b><br>${esc(e.text)}`, "alert", 12000);
+      this.toastHtml(`<b>Alert</b><br>${esc(e.text)}`, "alert", 12000);
       this.beep();
       if ("Notification" in window && Notification.permission === "granted")
         new Notification("Quant Terminal alert", { body: e.text });
@@ -772,10 +822,18 @@ class App {
     if (title) el.title = title;
   }
 
-  toast(html, kind = "", ms = 3500) {
+  toast(message, kind = "", ms = 3500) {
     const el = document.createElement("div");
     el.className = `toast ${kind}`;
-    el.innerHTML = html;
+    setToastContent(el, message);
+    $("#toasts").appendChild(el);
+    setTimeout(() => el.remove(), ms);
+  }
+
+  toastHtml(html, kind = "", ms = 3500) {
+    const el = document.createElement("div");
+    el.className = `toast ${kind}`;
+    setToastContent(el, html, { trustedHtml: true });
     $("#toasts").appendChild(el);
     setTimeout(() => el.remove(), ms);
   }
